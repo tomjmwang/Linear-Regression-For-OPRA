@@ -2,7 +2,7 @@ from sklearn import linear_model
 import json
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score, explained_variance_score
 
 
 
@@ -81,7 +81,7 @@ def learning_by_user(type,train_data):
     #      % mean_squared_error(test_y, pred_y))
     # Explained variance score: 1 is perfect prediction
     #print('Variance score: %.2f' % r2_score(test_y, pred_y))
-    return regr.coef_, mean_squared_error(test_y, pred_y),r2_score(test_y, pred_y)
+    return regr.coef_, mean_squared_error(test_y, pred_y),r2_score(test_y, pred_y), explained_variance_score(test_y, pred_y)
     # Plot outputs
     #plt.scatter(test_x, test_y,  color='black')
     #plt.plot(test_x, pred_y, color='blue', linewidth=3)
@@ -103,7 +103,7 @@ def learning_by_user_with_two_features(train_data):
     
     pred_y = regr.predict(test_x)
     
-    return regr.coef_, mean_squared_error(test_y, pred_y),r2_score(test_y, pred_y)
+    return regr.coef_, mean_squared_error(test_y, pred_y),r2_score(test_y, pred_y), explained_variance_score(test_y, pred_y)
 
         
 def KTDistance(rank1, rank2):
@@ -119,17 +119,17 @@ def NKTDistance(KT,rank1,rank2):
     
 
 def misplacement(rank1,rank2):
-    opt = np.zeros((len(rank1),len(rank2)),dtype='int32')
-    for i in range(1,len(rank1)):
-        for j in range(1,len(rank2)):
-            if rank1[i] == rank2[i]:
+    opt = np.zeros((len(rank1)+1,len(rank2)+1),dtype='int32')
+    for i in range(1,len(rank1)+1):
+        for j in range(1,len(rank2)+1):
+            if rank1[i-1] == rank2[j-1]:
                 opt[i,j] = opt[i-1,j-1] + 1
             else:
                 opt[i,j] = max(opt[i-1,j],opt[i,j-1])
-    return len(rank1) - opt[-1,-1]
+                
+    return len(rank1) - opt[len(rank1),len(rank2)]
     
 if __name__ == "__main__":
-
     file = open('RankNumber.json','r')
     data = file.read()
     file.close()
@@ -137,20 +137,42 @@ if __name__ == "__main__":
     train_data = translate_data_for_regression(parsed_data)
     #print(train_data)
     data_size = len(train_data.keys())
+    altered_data_size = data_size
     #learning_by_user_single(4,train_data[983])
-    m_better_than_KT_instances = 0
-    c_better_than_KT_instances = 0
-    #print(train_data[1511])
+    kt_best = 0
+    m_best = 0
+    c_best = 0
+    kt_best_out = 0
+    m_best_out = 0
+    c_best_out = 0
+    #print(train_data[726])
+    total_mean_error = 0
     for user,d in train_data.items():
         KT_result = learning_by_user(2,d)
         M_result = learning_by_user(4,d)
         C_result = learning_by_user_with_two_features(d)
-        if M_result[1] < KT_result[1]:
-            m_better_than_KT_instances += 1
-        if C_result[1] < KT_result[1]:
-            c_better_than_KT_instances += 1
-        print("User ",user,"'s result:\nKT--- Coefficients: ", KT_result[0],"Mean squared error: %.2f"%KT_result[1],"   Variance score: %.2f"%KT_result[2])
-        print("Misplacement--- Coefficients: ", M_result[0],"Mean squared error: %.2f"%M_result[1],"   Variance score: %.2f"%M_result[2])
-        print("Combined--- Coefficients: ", C_result[0],"Mean squared error: %.2f"%C_result[1],"   Variance score: %.2f"%C_result[2])
-    print("Total data amount: ", data_size, ", out of which ",m_better_than_KT_instances," instances Misplacement has better prediction than KT")
-    print("Total data amount: ", data_size, ", out of which ",c_better_than_KT_instances," instances Combined parameter has better prediction than KT")
+        
+        best_mean_square = min(KT_result[1],M_result[1],C_result[1])
+        if best_mean_square == KT_result[1]:
+            kt_best += 1
+        elif best_mean_square == M_result[1]:
+            m_best += 1
+        else:
+            c_best += 1
+        if best_mean_square < 300:
+            total_mean_error += best_mean_square
+            if best_mean_square == KT_result[1]:
+                kt_best_out += 1
+            elif best_mean_square == M_result[1]:
+                m_best_out += 1
+            else:
+                c_best_out += 1
+        else:
+            altered_data_size -= 1
+        #print("User ",user,"'s result:\nKT--- Coefficients: ", KT_result[0],"Mean squared error: %.2f"%KT_result[1]," r2 Variance score: %.2f"%KT_result[2],"explained variance score: %.2f"%KT_result[3])
+        #print("Misplacement--- Coefficients: ", M_result[0],"Mean squared error: %.2f"%M_result[1]," r2 Variance score: %.2f"%M_result[2],"explained variance score: %.2f"%M_result[3])
+        #print("Combined--- Coefficients: ", C_result[0],"Mean squared error: %.2f"%C_result[1]," r2 Variance score: %.2f"%C_result[2],"explained variance score: %.2f"%M_result[3])
+    average_mean_error = total_mean_error / altered_data_size
+    print("Total data amount:", data_size, ", out of which",kt_best,"instances KT is best,",m_best, "instances Misplacement is best,", c_best, "instances combined is best")
+    print("Data amount after eliminating outliers:", altered_data_size, ", out of which",kt_best_out,"instances KT is best,",m_best_out, "instances Misplacement is best,", c_best_out, "instances combined is best")
+    print("Average square error: %.2f"%average_mean_error, "after eliminating outliers,",altered_data_size,"users are counted")
