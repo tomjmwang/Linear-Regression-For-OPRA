@@ -65,15 +65,19 @@ def translate_data_for_regression(data):
     
     
 def learning_by_user(type,train_data):
-    train_x = np.reshape(train_data[type][:-5],(-1,1))
-    test_x = np.reshape(train_data[type][-5:],(-1,1))
-    train_y = train_data[1][:-5]
-    test_y = train_data[1][-5:]
+    #m_x = max(train_x)
+    #for n in range(len(train_x)):
+    #   train_x[n] = train[n]/m_x
+    train_x = np.reshape(train_data[type],(-1,1))
+    #test_x = np.reshape(train_data[type][-5:],(-1,1))
+    train_y = train_data[0]
+    #test_y = train_data[1][-5:]
     
     regr = linear_model.LinearRegression()
     regr.fit(train_x,train_y)
     
-    pred_y = regr.predict(test_x)
+    #pred_y = regr.predict(test_x)
+    pred_y = regr.predict(train_x)
     # The coefficients
     #print('Coefficients: \n', regr.coef_)
     # The mean squared error
@@ -81,7 +85,7 @@ def learning_by_user(type,train_data):
     #      % mean_squared_error(test_y, pred_y))
     # Explained variance score: 1 is perfect prediction
     #print('Variance score: %.2f' % r2_score(test_y, pred_y))
-    return regr.coef_, mean_squared_error(test_y, pred_y),r2_score(test_y, pred_y), explained_variance_score(test_y, pred_y)
+    return regr.coef_, mean_squared_error(train_y, pred_y),r2_score(train_y, pred_y), explained_variance_score(train_y, pred_y),regr.intercept_
     # Plot outputs
     #plt.scatter(test_x, test_y,  color='black')
     #plt.plot(test_x, pred_y, color='blue', linewidth=3)
@@ -93,17 +97,22 @@ def learning_by_user(type,train_data):
     
     
 def learning_by_user_with_two_features(train_data):
-    train_x = np.reshape([train_data[2][:-5],train_data[4][:-5]],(-1,2))
-    test_x = np.reshape([train_data[2][-5:],train_data[4][-5:]],(-1,2))
-    train_y = train_data[1][:-5]
-    test_y = train_data[1][-5:]
+    #m_x_1 = max(train_data[2])
+    #train_x_1 = train_data[2]
+    #for n in range(len(train_x_1))
+        #train_x_1[]
+    #train_x_2 = train_data[4]
+    train_x = np.reshape([train_data[2],train_data[4]],(-1,2))
+    #test_x = np.reshape([train_data[2][-5:],train_data[4][-5:]],(-1,2))
+    train_y = train_data[0]
+    #test_y = train_data[1][-5:]
     
     regr = linear_model.LinearRegression()
     regr.fit(train_x,train_y)
     
-    pred_y = regr.predict(test_x)
+    pred_y = regr.predict(train_x)
     
-    return regr.coef_, mean_squared_error(test_y, pred_y),r2_score(test_y, pred_y), explained_variance_score(test_y, pred_y)
+    return regr.coef_, mean_squared_error(train_y, pred_y),r2_score(train_y, pred_y), explained_variance_score(train_y, pred_y),regr.intercept_
 
         
 def KTDistance(rank1, rank2):
@@ -139,14 +148,45 @@ if __name__ == "__main__":
     data_size = len(train_data.keys())
     altered_data_size = data_size
     #learning_by_user_single(4,train_data[983])
+    #best data before eliminating outliers
     kt_best = 0
     m_best = 0
     c_best = 0
+    #best data after eliminating outliers
     kt_best_out = 0
     m_best_out = 0
     c_best_out = 0
     #print(train_data[726])
     total_mean_error = 0
+    #total MSE for each method
+    tmkt = 0
+    tmm = 0
+    tmc = 0
+    #total submit time
+    tt = 0
+    #total submit time entries
+    tt_e = 0
+    #total first_last time
+    tt2 = 0
+    #total first_last time entries
+    tt_e2 = 0
+
+    #total se for regression with no feature (horizontal line)
+    t_mse = 0
+    for user,d in train_data.items():
+        ave_t = sum(d[0])/len(d[0])
+        mse = sum([(n-ave_t)*(n-ave_t) for n in d[0]])
+        if mse < 200:
+            t_mse += mse
+        else:
+            altered_data_size -= 1
+    a_mse = t_mse / altered_data_size
+    print(ave_t, a_mse)
+    
+    altered_data_size = data_size
+
+    best_kt_sum = 0
+    best_m_sum = 0
     for user,d in train_data.items():
         KT_result = learning_by_user(2,d)
         M_result = learning_by_user(4,d)
@@ -159,20 +199,45 @@ if __name__ == "__main__":
             m_best += 1
         else:
             c_best += 1
-        if best_mean_square < 300:
+        if best_mean_square < 200:
             total_mean_error += best_mean_square
+            tmkt += KT_result[1]
+            tmm += M_result[1]
+            tmc += C_result[1]
+            tt += sum(d[0])
+            tt_e += len(d[0])
+            tt2 += sum(d[1])
+            tt_e2 += len(d[1])
             if best_mean_square == KT_result[1]:
                 kt_best_out += 1
+                best_kt_sum += best_mean_square
             elif best_mean_square == M_result[1]:
                 m_best_out += 1
+                best_m_sum += best_mean_square
             else:
                 c_best_out += 1
         else:
             altered_data_size -= 1
-        #print("User ",user,"'s result:\nKT--- Coefficients: ", KT_result[0],"Mean squared error: %.2f"%KT_result[1]," r2 Variance score: %.2f"%KT_result[2],"explained variance score: %.2f"%KT_result[3])
-        #print("Misplacement--- Coefficients: ", M_result[0],"Mean squared error: %.2f"%M_result[1]," r2 Variance score: %.2f"%M_result[2],"explained variance score: %.2f"%M_result[3])
-        #print("Combined--- Coefficients: ", C_result[0],"Mean squared error: %.2f"%C_result[1]," r2 Variance score: %.2f"%C_result[2],"explained variance score: %.2f"%M_result[3])
+        #if user == 275:
+            #print("User ",user,"'s result:\nKT--- Coefficients: ", KT_result[0],KT_result[4],"Mean squared error: %.2f"%KT_result[1]," r2 Variance score: %.2f"%KT_result[2],"explained variance score: %.2f"%KT_result[3])
+            #print("Misplacement--- Coefficients: ", M_result[0],M_result[4],"Mean squared error: %.2f"%M_result[1]," r2 Variance score: %.2f"%M_result[2],"explained variance score: %.2f"%M_result[3])
+            #print("Combined--- Coefficients: ", C_result[0],C_result[4],"Mean squared error: %.2f"%C_result[1]," r2 Variance score: %.2f"%C_result[2],"explained variance score: %.2f"%M_result[3])
     average_mean_error = total_mean_error / altered_data_size
-    print("Total data amount:", data_size, ", out of which",kt_best,"instances KT is best,",m_best, "instances Misplacement is best,", c_best, "instances combined is best")
-    print("Data amount after eliminating outliers:", altered_data_size, ", out of which",kt_best_out,"instances KT is best,",m_best_out, "instances Misplacement is best,", c_best_out, "instances combined is best")
-    print("Average square error: %.2f"%average_mean_error, "after eliminating outliers,",altered_data_size,"users are counted")
+    amkt = tmkt / altered_data_size
+    atmm = tmm / altered_data_size
+    atmc = tmc / altered_data_size
+    att = tt/tt_e
+    att2 = tt2/tt_e2
+    print(best_kt_sum/kt_best_out,best_m_sum/m_best_out)
+    #print("Total data amount:", data_size, ", out of which",kt_best,"instances KT is best,",m_best, "instances Misplacement is best,", c_best, "instances combined is best")
+    #print("Data amount after eliminating outliers:", altered_data_size, ", out of which",kt_best_out,"instances KT is best,",m_best_out, "instances Misplacement is best,", c_best_out, "instances combined is best")
+    #print("Data amount after eliminating outliers:", att,att2, ", out of which",amkt,"instances KT is best,",atmm, "instances Misplacement is best,", atmc, "instances combined is best")
+    #print("Average square error: %.2f"%average_mean_error, "after eliminating outliers,",altered_data_size,"users are counted")
+    #print(train_data[275])
+
+    #plt.scatter(test_x, test_y,  color='black')
+
+
+
+
+    
