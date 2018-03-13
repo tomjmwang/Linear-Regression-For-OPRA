@@ -25,11 +25,29 @@ def parse_data(data):
         vote_data["time_submitted"] = float(vote["time_submission"]) / 1000
         if int(ori_data[0]["time"][0]) < 100000:
             vote_data["time_first_to_last"] = (float(ori_data[len(ori_data)-1]["time"][1]) - float(ori_data[0]["time"][0])) / 1000
+            vote_data["number_of_moves"] = len(ori_data)
+            vote_data["time_of_first_move"] = float(ori_data[0]["time"][0]) / 1000
+            vote_data["ave_each_action_time"] = sum([float(d["time"][1])-float(d["time"][0]) for d in ori_data ])/len(ori_data) / 1000
+            total_interval = 0.0
+            for i in range(1,len(ori_data)):
+                total_interval += float(ori_data[i]["time"][0]) - float(ori_data[i-1]["time"][1])
+            if len(ori_data) == 1:
+                vote_data["ave_interval_between_actions"] = 0
+            else:
+                vote_data["ave_interval_between_actions"] = total_interval / (len(ori_data)-1) / 1000
         else:
             vote_data["time_first_to_last"] = (float(ori_data[len(ori_data)-1]["time"][1]) - float(ori_data[1]["time"][0])) / 1000
+            vote_data["number_of_moves"] = len(ori_data) - 1
+            vote_data["time_of_first_move"] = float(ori_data[1]["time"][0]) / 1000
+            vote_data["ave_each_action_time"] = sum([float(d["time"][1])-float(d["time"][0]) for d in ori_data[1:] ])/(len(ori_data)-1) / 1000
+            total_interval = 0.0
+            for i in range(2,len(ori_data)):
+                total_interval += float(ori_data[i]["time"][0]) - float(ori_data[i-1]["time"][1])
+            vote_data["ave_interval_between_actions"] = total_interval / (len(ori_data)-2) / 1000
         vote_data["kt"] = KTDistance(ir,fr)
         vote_data["n_kt"] = NKTDistance(vote_data["kt"],ir,fr)
         vote_data["misplacement"] = misplacement(ir,fr)
+        
         user = vote["user_id"]
         if user in result.keys():
             result[user].append(vote_data)
@@ -53,13 +71,21 @@ def translate_data_for_regression(data):
         x1 = [] #KT Distance
         x2 = [] #Normalized KT Distance
         x3 = [] #Misplacement
+        x4 = [] #time between page loading and first action
+        x5 = [] #number of moves
+        x6 = [] #average time for each action for each poll
+        x7 = [] #average time between each action for each poll
         for r in records:
             y1.append(r["time_submitted"])
             y2.append(r["time_first_to_last"])
             x1.append(r["kt"])
             x2.append(r["n_kt"])
             x3.append(r["misplacement"])
-        train_data = [y1,y2,x1,x2,x3]
+            x4.append(r["time_of_first_move"])
+            x5.append(r["number_of_moves"])
+            x6.append(r["ave_each_action_time"])
+            x7.append(r["ave_interval_between_actions"])
+        train_data = [y1,y2,x1,x2,x3,x4,x5,x6,x7]
         result[user] = train_data
     return result
     
@@ -113,8 +139,25 @@ def learning_by_user_with_two_features(train_data):
     pred_y = regr.predict(train_x)
     
     return regr.coef_, mean_squared_error(train_y, pred_y),r2_score(train_y, pred_y), explained_variance_score(train_y, pred_y),regr.intercept_
+    
+def learning_by_user_with_multiple_features(feature_list,train_data):
+    x_list = []
+    for f in feature_list:
+        x_list.append(train_data[f])
+    #print(x_list)
+    for l in range(len(x_list)):
+        max_x = max(x_list[l])
+        for j in range(len(x_list[l])):
+            x_list[l][j] = x_list[l][j]/max_x
+    #print(x_list)
+    train_x = np.reshape(x_list,(-1,len(feature_list)))
+    train_y = train_data[0]
+    regr = linear_model.LinearRegression()
+    regr.fit(train_x,train_y)
+    pred_y = regr.predict(train_x)
+    return regr.coef_, mean_squared_error(train_y, pred_y),r2_score(train_y, pred_y), explained_variance_score(train_y, pred_y),regr.intercept_
 
-        
+
 def KTDistance(rank1, rank2):
     pairwise_diff = 0
     for i in range(len(rank1)):
@@ -184,7 +227,28 @@ if __name__ == "__main__":
     print(ave_t, a_mse)
     
     altered_data_size = data_size
+    
+    mse_list = []
+    multiple_f_mse = 0
+    for user,d in train_data.items():
+        feature_list = [2,3,4,5,6,7,8]
+        T_result = learning_by_user_with_multiple_features(feature_list,d)
+        if T_result[1] < 50:
+            mse_list.append(T_result[1])
+            multiple_f_mse += T_result[1]
+        else:
+            altered_data_size -= 1
+        #print("User ",user,"'s result:\nKT--- Coefficients: ", T_result[0],T_result[4],"Mean squared error: %.2f"%T_result[1]," r2 Variance score: %.2f"%T_result[2],"explained variance score: %.2f"%T_result[3])
+    print(multiple_f_mse/altered_data_size, altered_data_size)
+    b = []
+    i = 0
+    while i < 200:
+        b.append(i)
+        i+=5
+    plt.hist(mse_list,bins=b)
+    plt.show()
 
+    altered_data_size = data_size
     best_kt_sum = 0
     best_m_sum = 0
     for user,d in train_data.items():
@@ -228,7 +292,7 @@ if __name__ == "__main__":
     atmc = tmc / altered_data_size
     att = tt/tt_e
     att2 = tt2/tt_e2
-    print(best_kt_sum/kt_best_out,best_m_sum/m_best_out)
+    #print(best_kt_sum/kt_best_out,best_m_sum/m_best_out)
     #print("Total data amount:", data_size, ", out of which",kt_best,"instances KT is best,",m_best, "instances Misplacement is best,", c_best, "instances combined is best")
     #print("Data amount after eliminating outliers:", altered_data_size, ", out of which",kt_best_out,"instances KT is best,",m_best_out, "instances Misplacement is best,", c_best_out, "instances combined is best")
     #print("Data amount after eliminating outliers:", att,att2, ", out of which",amkt,"instances KT is best,",atmm, "instances Misplacement is best,", atmc, "instances combined is best")
