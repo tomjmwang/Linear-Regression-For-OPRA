@@ -3,7 +3,8 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, r2_score, explained_variance_score
-
+import copy
+import pickle
 
 
 def parse_data(data):
@@ -47,7 +48,12 @@ def parse_data(data):
         vote_data["kt"] = KTDistance(ir,fr)
         vote_data["n_kt"] = NKTDistance(vote_data["kt"],ir,fr)
         vote_data["misplacement"] = misplacement(ir,fr)
-        
+        vote_data["action_sequence"] = calculate_action_sequence(ori_data,ir,fr)
+        for i in range(10):
+            name = "f" + str(i)
+            vote_data[name] = [action_similarity(vote_data["action_sequence"],inserlection_predictor(i,copy.deepcopy(ir),copy.deepcopy(fr))[1])]
+            vote_data[name].append(action_distance(vote_data["action_sequence"],inserlection_predictor(i,copy.deepcopy(ir),copy.deepcopy(fr))[1]))
+            #print(name,vote_data[name])
         user = vote["user_id"]
         if user in result.keys():
             result[user].append(vote_data)
@@ -60,6 +66,56 @@ def parse_data(data):
     #long_record = [r for r in record_length if r >= 20]
     #print (len(long_record))
     return result
+
+#input: action data (list of dictionaries), initial ranking (list of string), final ranking (list of string)
+#output: list of tuples of three items
+def calculate_action_sequence(data,ir,fr):
+    seq = []
+    if int(data[0]["time"][0]) > 100000:
+        data = data[1:]
+    for action in data:
+        #print(action)
+        try:
+            first_rank = [item[0]["name"] for item in action["rank"][0]]
+            last_rank = [item[0]["name"] for item in action["rank"][1]]
+            #print(first_rank,last_rank)
+            item = action["item"]
+            vector = (fr.index(item),first_rank.index(item),last_rank.index(item))
+        except:
+            vector = (0,0,0)
+        seq.append(vector)
+    return seq
+
+def action_similarity(action1,action2):
+    opt = np.zeros((len(action1)+1,len(action2)+1),dtype='int32')
+    #print(action1,action2)
+    for i in range(1,len(action1)+1):
+        for j in range(1,len(action2)+1):
+            if action1[i-1] == action2[j-1]:
+                opt[i,j] = opt[i-1,j-1] + 1
+            else:
+                opt[i,j] = max(opt[i-1,j],opt[i,j-1])
+    return opt[len(action1),len(action2)]
+
+def single_penalty(vector):
+    return vector[0]**2 + vector[1]**2 + vector[2]**2
+
+def aligned_distance(vector1,vector2):
+    return (vector1[0] - vector2[0])**2 + (vector1[1] - vector2[1])**2 + (vector1[2] - vector2[2])**2
+
+#action1 -- user's action
+#action2 -- expected action
+def action_distance(action1, action2):
+    opt = np.zeros((len(action1)+1,len(action2)+1),dtype='int32')
+    #print(action1,action2)
+    for i in range(1,len(action1)+1):
+        opt[i,0] = opt[i-1,0] + single_penalty(action1[i-1])
+    for i in range(1,len(action2)+1):
+        opt[0,i] = opt[0,i-1] + single_penalty(action2[i-1])
+    for i in range(1,len(action1)+1):
+        for j in range(1,len(action2)+1):
+            opt[i,j] = min(opt[i-1,j]+single_penalty(action1[i-1]),opt[i,j-1]+single_penalty(action2[j-1]),opt[i-1,j-1]+aligned_distance(action1[i-1],action2[j-1]))
+    return opt[len(action1),len(action2)]
     
 def translate_data_for_regression(data):
     result = {}
@@ -75,6 +131,12 @@ def translate_data_for_regression(data):
         x5 = [] #number of moves
         x6 = [] #average time for each action for each poll
         x7 = [] #average time between each action for each poll
+        total_similarity = {}
+        total_distance = {}
+        for i in range(10):
+            name = "f" + str(i)
+            total_similarity[name] = 0
+            total_distance[name] = 0
         for r in records:
             y1.append(r["time_submitted"])
             y2.append(r["time_first_to_last"])
@@ -85,9 +147,42 @@ def translate_data_for_regression(data):
             x5.append(r["number_of_moves"])
             x6.append(r["ave_each_action_time"])
             x7.append(r["ave_interval_between_actions"])
-        train_data = [y1,y2,x1,x2,x3,x4,x5,x6,x7]
+            for i in range(10):
+                name = "f" + str(i)
+                total_similarity[name] += r[name][0]
+                total_distance[name] += r[name][1]
+        train_data = [y1,y2,x1,x2,x3,x4,x5,x6,x7,total_similarity,total_distance]
         result[user] = train_data
+
     return result
+
+def cluster_users(data):
+    clusters_sim = [{},{},{},{},{},{},{},{},{},{}]
+    clusters_dist = [{},{},{},{},{},{},{},{},{},{}]
+    for user,d in data.items():
+        sim = 0
+        dist = 99999
+        final_f_sim = "f0"
+        final_f_dist = "f0"
+        for f,value in d[9].items():
+            #print(value)
+            if value > sim:
+                sim = value
+                final_f_sim = f
+        for f,value in d[10].items():
+            if value < dist:
+                dist = value
+                final_f_dist = f
+
+        ind = int(final_f_sim[1:])
+        clusters_sim[ind][user] = d[:-2]
+        ind = int(final_f_dist[1:])
+        clusters_dist[ind][user] = d[:-2]
+    lengths_sim = [len(c) for c in clusters_sim]
+    lengths_dist = [len(c) for c in clusters_dist]
+    print(lengths_sim)
+    print(lengths_dist)
+    return clusters_sim, clusters_dist
     
     
 def learning_by_user(type,train_data):
@@ -150,7 +245,10 @@ def learning_by_user_with_multiple_features(feature_list,train_data):
         for j in range(len(x_list[l])):
             x_list[l][j] = x_list[l][j]/max_x
     #print(x_list)
-    train_x = np.reshape(x_list,(-1,len(feature_list)))
+    if len(x_list) == 1:
+        train_x = np.reshape(x_list[0],(-1,len(feature_list)))
+    else:
+        train_x = np.reshape(x_list,(-1,len(feature_list)))
     train_y = train_data[0]
     regr = linear_model.LinearRegression()
     regr.fit(train_x,train_y)
@@ -180,13 +278,177 @@ def misplacement(rank1,rank2):
                 opt[i,j] = max(opt[i-1,j],opt[i,j-1])
                 
     return len(rank1) - opt[len(rank1),len(rank2)]
+
+def selection_predictor(rank1,rank2):
+    moves = []
+    dist = 0
+    for i in range(len(rank2)):
+        if rank1[i] != rank2[i]:
+            for j in range(i+1,len(rank1)):
+                if rank1[j] == rank2[i]:
+                    rank1.insert(i,rank1.pop(j))
+                    action = (i,j,i)
+                    moves.append(action)
+                    dist += j-i
+                    break
+    return (len(moves),moves,dist)
+
+def insertion_predictor(rank1,rank2):
+    moves = []
+    dist = 0
+    for i in range(1,len(rank1)):
+        for j in range(0,i):
+            if rank2.index(rank1[j]) > rank2.index(rank1[i]):
+                action = (rank2.index(rank1[i]),i,j)
+                rank1.insert(j,rank1.pop(i))
+                moves.append(action)
+                dist += i-j
+                break
+    return (len(moves),moves,dist)
+
+def inserlection_predictor(num,rank1,rank2):
+    if num == 0:
+        return insertion_predictor(rank1,rank2)
+    if num >= len(rank1)-1:
+        return selection_predictor(rank1,rank2)
+    moves = []
+    dist = 0
+    for i in range(num):
+        if rank1[i] != rank2[i]:
+            for j in range(i+1,len(rank1)):
+                if rank1[j] == rank2[i]:
+                    rank1.insert(i,rank1.pop(j))
+                    action = (i,j,i)
+                    moves.append(action)
+                    dist += j-i
+                    break
+    for i in range(num+1,len(rank1)):
+        for j in range(num,i):
+            if rank2.index(rank1[j]) > rank2.index(rank1[i]):
+                dist += i-j
+                action = (rank2.index(rank1[i]),i,j)
+                rank1.insert(j,rank1.pop(i))
+                moves.append(action)
+                break
+    #print(rank1)
+    return (len(moves),moves,dist)
+
+def learning_action(train_data,feature_list):
+    data_size = len(train_data.keys())
+    altered_data_size = data_size
+    mse_list = []
+    multiple_f_mse = 0
+    for user,d in train_data.items():
+        #if user == 268:
+            #print(d)
+        T_result = learning_by_user_with_multiple_features(feature_list,d)
+        if T_result[1] < 100:
+            mse_list.append(T_result[1])
+            multiple_f_mse += T_result[1]
+            #print(T_result)
+        else:
+            altered_data_size -= 1
+        #print("User ",user,"'s result:\nKT--- Coefficients: ", T_result[0],T_result[4],"Mean squared error: %.2f"%T_result[1]," r2 Variance score: %.2f"%T_result[2],"explained variance score: %.2f"%T_result[3])
+    return multiple_f_mse/altered_data_size
+
+def feature_name(num):
+    if num == 2:
+        return "KT"
+    elif num == 3:
+        return "NKT"
+    elif num == 4:
+        return "Misp"
+    elif num == 5:
+        return "TBA"
+    elif num == 6:
+        return "NoM"
+    elif num == 7:
+        return "ToEA"
+    else:
+        return "TBEA"
+
     
 if __name__ == "__main__":
-    file = open('RankNumber.json','r')
-    data = file.read()
-    file.close()
-    parsed_data = parse_data(data)
-    train_data = translate_data_for_regression(parsed_data)
+    #for i in range(10):
+        #print(inserlection_predictor(i,[2,4,1,6,3,5,0,9,8,7],[7,8,6,1,3,2,4,0,5,9]))
+    
+    #file = open('RankNumber.json','r')
+    #data = file.read()
+    #file.close()
+    #parsed_data = parse_data(data)
+    #train_data = translate_data_for_regression(parsed_data)
+    #clustered_data = cluster_users(train_data)
+    s_c_file = open("similarity_clusters","rb")
+    d_c_file = open("distance_clusters","rb")
+    clustered_data_similarity = pickle.load(s_c_file)
+    clustered_data_distance = pickle.load(d_c_file)
+    #pickle.dump(clustered_data[0],s_c_file)
+    #pickle.dump(clustered_data[1],d_c_file)
+    clustered_data = clustered_data_similarity,clustered_data_distance
+    s_c_file.close()
+    d_c_file.close()
+    train_data = clustered_data[0][0]
+
+    f_names = ["f0","f1","f2","f3","f4","f5","f6","f7","f8"]
+    sim_len = [len(c) for c in clustered_data_distance[:-1]]
+
+    plt.bar(f_names,sim_len)
+    plt.show()
+
+    """
+    feature_list = [2,4,5,6,7,8]
+    mse_x1 = []
+    mse_x2 = []
+    mse_x3 = []
+    mse_x4 = []
+    mse_x5 = []
+    mse_x6 = []
+    mse_all = []
+
+    for c in clustered_data_distance[:-1]:
+        mse_x1.append(learning_action(c,[2]))
+        mse_x2.append(learning_action(c,[4]))
+        mse_x3.append(learning_action(c,[5]))
+        mse_x4.append(learning_action(c,[6]))
+        mse_x5.append(learning_action(c,[7]))
+        mse_x6.append(learning_action(c,[8]))
+        mse_all.append(learning_action(c,feature_list))
+    print(mse_x1)
+    x = [4,12,20,28,36,44,52,60,68]
+    ax = plt.subplot(111)
+    ax.bar([n-3 for n in x],mse_x1,width=1,color='b',align='center')
+    ax.bar([n-2 for n in x],mse_x2,width=1,color='g',align='center')
+    ax.bar([n-1 for n in x],mse_x3,width=1,color='r',align='center')
+    ax.bar([n for n in x],mse_x4,width=1,color='y',align='center')
+    ax.bar([n+1 for n in x],mse_x5,width=1,color='orange',align='center')
+    ax.bar([n+2 for n in x],mse_x6,width=1,color='purple',align='center')
+    ax.bar([n+3 for n in x],mse_all,width=1,color='black',align='center')
+
+    plt.show()
+    
+
+    while True:
+        try:
+            print("Enter command")
+            command = input()
+            if command == "cluster":
+                print("Enter cluster type: (0 is similarity, 1 is distance)")
+                cluster_type = int(input())
+                print("Enter f number: (0-8)")
+                cluster_number = int(input())
+                learning_action(clustered_data[cluster_type][cluster_number])
+            elif command == "all":
+                pass
+            elif command == "quit":
+                break
+            else:
+                print("Unknown command")
+        except:
+            print("Some error occurred, try again")
+            continue
+
+
+
     #print(train_data)
     data_size = len(train_data.keys())
     altered_data_size = data_size
@@ -224,18 +486,22 @@ if __name__ == "__main__":
         else:
             altered_data_size -= 1
     a_mse = t_mse / altered_data_size
-    print(ave_t, a_mse)
+    #print(ave_t, a_mse)
     
     altered_data_size = data_size
     
     mse_list = []
     multiple_f_mse = 0
+    #print(train_data.keys())
     for user,d in train_data.items():
-        feature_list = [2,3,4,5,6,7,8]
+        #if user == 268:
+            #print(d)
+        feature_list = [4,5,6,7,8]
         T_result = learning_by_user_with_multiple_features(feature_list,d)
-        if T_result[1] < 50:
+        if T_result[1] < 200:
             mse_list.append(T_result[1])
             multiple_f_mse += T_result[1]
+            #print(T_result)
         else:
             altered_data_size -= 1
         #print("User ",user,"'s result:\nKT--- Coefficients: ", T_result[0],T_result[4],"Mean squared error: %.2f"%T_result[1]," r2 Variance score: %.2f"%T_result[2],"explained variance score: %.2f"%T_result[3])
@@ -245,8 +511,8 @@ if __name__ == "__main__":
     while i < 200:
         b.append(i)
         i+=5
-    plt.hist(mse_list,bins=b)
-    plt.show()
+    #plt.hist(mse_list,bins=b)
+    #plt.show()
 
     altered_data_size = data_size
     best_kt_sum = 0
@@ -300,8 +566,10 @@ if __name__ == "__main__":
     #print(train_data[275])
 
     #plt.scatter(test_x, test_y,  color='black')
+    """
 
 
+    
 
 
     
