@@ -1,10 +1,15 @@
 from sklearn import linear_model
+from sklearn.model_selection import LeaveOneOut
 import json
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, r2_score, explained_variance_score
 import copy
 import pickle
+import dateutil
+import datetime
+from dateutil.tz import tzutc
+import itertools
 
 
 def parse_data(data):
@@ -12,8 +17,9 @@ def parse_data(data):
     result = {}
     for vote in all_data:
         ori_data = vote["data"]
+        #print(len(ori_data))
         if len(ori_data) == 0:
-            #print("vote id ", vote["vote_id"], " has no action.")
+            #print("vote id ", vote["vote_id"],vote["user_id"], " has no action.")
             continue
         vote_data = {}
         ir = [item[0]["name"] for item in vote["initial_ranking"]]
@@ -25,7 +31,10 @@ def parse_data(data):
         vote_data["fr"] = fr
         vote_data["time_submitted"] = float(vote["time_submission"]) / 1000
         if int(ori_data[0]["time"][0]) < 100000:
-            vote_data["time_first_to_last"] = (float(ori_data[len(ori_data)-1]["time"][1]) - float(ori_data[0]["time"][0])) / 1000
+            try:
+                vote_data["time_first_to_last"] = (float(ori_data[len(ori_data)-1]["time"][1]) - float(ori_data[0]["time"][0])) / 1000
+            except:
+                vote_data["time_first_to_last"] = (float(ori_data[0]["time"][1]) - float(ori_data[0]["time"][0])) / 1000
             vote_data["number_of_moves"] = len(ori_data)
             vote_data["time_of_first_move"] = float(ori_data[0]["time"][0]) / 1000
             vote_data["ave_each_action_time"] = sum([float(d["time"][1])-float(d["time"][0]) for d in ori_data ])/len(ori_data) / 1000
@@ -37,14 +46,26 @@ def parse_data(data):
             else:
                 vote_data["ave_interval_between_actions"] = total_interval / (len(ori_data)-1) / 1000
         else:
-            vote_data["time_first_to_last"] = (float(ori_data[len(ori_data)-1]["time"][1]) - float(ori_data[1]["time"][0])) / 1000
+            try:
+                vote_data["time_first_to_last"] = (float(ori_data[len(ori_data)-1]["time"][1]) - float(ori_data[1]["time"][0])) / 1000
+            except:
+                vote_data["time_first_to_last"] = (float(ori_data[0]["time"][1]) - float(ori_data[0]["time"][0])) / 1000
             vote_data["number_of_moves"] = len(ori_data) - 1
-            vote_data["time_of_first_move"] = float(ori_data[1]["time"][0]) / 1000
-            vote_data["ave_each_action_time"] = sum([float(d["time"][1])-float(d["time"][0]) for d in ori_data[1:] ])/(len(ori_data)-1) / 1000
+            try:
+                vote_data["time_of_first_move"] = float(ori_data[1]["time"][0]) / 1000
+            except:
+                vote_data["time_of_first_move"] = float(ori_data[0]["time"][0]) / 1000
+            if len(ori_data) > 1:
+                vote_data["ave_each_action_time"] = sum([float(d["time"][1])-float(d["time"][0]) for d in ori_data[1:] ])/(len(ori_data)-1) / 1000
+            else:
+                vote_data["ave_each_action_time"] = sum([float(d["time"][1])-float(d["time"][0]) for d in ori_data[1:] ])/(1) / 1000
             total_interval = 0.0
             for i in range(2,len(ori_data)):
                 total_interval += float(ori_data[i]["time"][0]) - float(ori_data[i-1]["time"][1])
-            vote_data["ave_interval_between_actions"] = total_interval / (len(ori_data)-2) / 1000
+            if len(ori_data) < 3 :
+                vote_data["ave_interval_between_actions"] = 0
+            else:
+                vote_data["ave_interval_between_actions"] = total_interval / (len(ori_data)-2) / 1000
         vote_data["kt"] = KTDistance(ir,fr)
         vote_data["n_kt"] = NKTDistance(vote_data["kt"],ir,fr)
         vote_data["misplacement"] = misplacement(ir,fr)
@@ -54,7 +75,11 @@ def parse_data(data):
             vote_data[name] = [action_similarity(vote_data["action_sequence"],inserlection_predictor(i,copy.deepcopy(ir),copy.deepcopy(fr))[1])]
             vote_data[name].append(action_distance(vote_data["action_sequence"],inserlection_predictor(i,copy.deepcopy(ir),copy.deepcopy(fr))[1]))
             #print(name,vote_data[name])
+
         user = vote["user_id"]
+
+        #if user == 654 and vote["poll_id"] == 107:
+            #print(vote_data["kt"])
         if user in result.keys():
             result[user].append(vote_data)
         else:
@@ -120,6 +145,7 @@ def action_distance(action1, action2):
 def translate_data_for_regression(data):
     result = {}
     for user,records in data.items():
+        #print(len(records))
         if len(records) < 20:
             continue
         y1 = [] #submit_time
@@ -246,14 +272,63 @@ def learning_by_user_with_multiple_features(feature_list,train_data):
             x_list[l][j] = x_list[l][j]/max_x
     #print(x_list)
     if len(x_list) == 1:
-        train_x = np.reshape(x_list[0],(-1,len(feature_list)))
+        train_x = np.reshape(x_list[0],(-1,1))
     else:
-        train_x = np.reshape(x_list,(-1,len(feature_list)))
+        train_x = np.transpose(x_list)
+    new_y = []
+    for i in range(len(train_data[0])):
+        new_y.append(train_data[1][i]+train_data[5][i])
+    #print(new_y)
     train_y = train_data[0]
     regr = linear_model.LinearRegression()
     regr.fit(train_x,train_y)
     pred_y = regr.predict(train_x)
     return regr.coef_, mean_squared_error(train_y, pred_y),r2_score(train_y, pred_y), explained_variance_score(train_y, pred_y),regr.intercept_
+
+def learning_by_user_with_multiple_features_loo(feature_list,train_data):
+    loo = LeaveOneOut()
+    x_list = []
+    new_y = []
+    for i in range(len(train_data[0])):
+        new_y.append(train_data[1][i]+train_data[5][i])
+    y_list = train_data[0]
+    #y_list = new_y
+    for f in feature_list:
+        x_list.append(train_data[f])
+    #print(x_list)
+    for l in range(len(x_list)):
+        max_x = max(x_list[l])
+        for j in range(len(x_list[l])):
+            x_list[l][j] = x_list[l][j]/max_x
+    total_se = 0.0
+    if len(x_list) > 1:
+        all_x = np.transpose(x_list)
+        for train,test in loo.split(all_x):
+            train_x = [all_x[i] for i in train]
+            test_x = [all_x[test[0]]]
+            train_y = [y_list[i] for i in train]
+            test_y = [y_list[test[0]]]
+            regr = linear_model.LinearRegression()
+            regr.fit(train_x,train_y)
+            pred_y = regr.predict(test_x)
+            se = mean_squared_error(test_y,pred_y)
+            total_se += se
+    else:
+        all_x = np.reshape(x_list[0],(-1,1))
+        for train,test in loo.split(all_x):
+            train_x = [all_x[i] for i in train]
+            test_x = [all_x[test[0]]]
+            train_y = [y_list[i] for i in train]
+            #print(y_list,test)
+            test_y = [y_list[test[0]]]
+            regr = linear_model.LinearRegression()
+            regr.fit(train_x,train_y)
+            pred_y = regr.predict(test_x)
+            se = mean_squared_error(test_y,pred_y)
+            total_se += se
+    return total_se/len(y_list)
+
+
 
 
 def KTDistance(rank1, rank2):
@@ -367,35 +442,139 @@ def feature_name(num):
     else:
         return "TBEA"
 
-    
+def checkVote(v):
+    for d in v['data']:
+        if ('item' not in d) or (len(d['item']) == 0):
+            return False
+    if dateutil.parser.parse(v["timestamp_submission"]) < start_time:
+        return False
+    if len(v['submitted_ranking']) == 0:
+        return False
+    if len(v['data']) == 0:
+        return False
+    submitted_names = [int(i['name'][4:]) for i in list(itertools.chain.from_iterable(v['submitted_ranking']))]
+    if sorted(submitted_names) != submitted_names:
+        return False
+    return True
+
+def checkUser(u, votes):
+    vote_poll_ids = [v['poll_id'] for v in votes if v['user_id']==u]
+    if len(vote_poll_ids) != len(poll_ids):
+        return False
+    if set(vote_poll_ids) != poll_ids:
+        return False
+    return True
+
+def calculate_vote_prediction_error(vote,type=1):
+    ir = [item[0]["name"] for item in vote["initial_ranking"]]
+    fr = [item[0]["name"] for item in vote["submitted_ranking"]]
+    actions = calculate_action_sequence(vote["data"],ir,fr)
+    expected_actions = [inserlection_predictor(i,copy.deepcopy(ir),copy.deepcopy(fr))[1] for i in range(9)]
+    if type == 1:
+        sims = [action_similarity(actions,e_a) for e_a in expected_actions]
+        min_sims = min(sims)
+        f_num = sims.index(min_sims)
+        error = len(actions) - len(expected_actions[f_num])
+        return error
+    else:
+        dists = [action_similarity(actions,e_a) for e_a in expected_actions]
+        min_dists = min(dists)
+        f_num = dists.index(min_dists)
+        error = len(actions) - len(expected_actions[f_num])
+        return error
+
+def calculate_distance_time(vote):
+    dist_list = []
+    time_list = []
+    for record in vote["data"]:
+        cur_item = record["item"]
+        first_rank = [item[0]["name"] for item in record["rank"][0]]
+        last_rank = [item[0]["name"] for item in record["rank"][1]]
+        dist_list.append(abs(last_rank.index(cur_item)-first_rank.index(cur_item)))
+        time_list.append((float(record["time"][1])-float(record["time"][0]))/1000)
+    return dist_list,time_list
+
 if __name__ == "__main__":
+    
+    start_time = datetime.datetime(2018, 1, 20, 1, 40, 0, tzinfo=tzutc())
+    all_votes = json.load(open('RankNumber.json'))
+    all_users = json.load(open('user.json'))
+    dic_all_users = {d["user_id"]: d for d in all_users}
+    all_polls = json.load(open('poll.json'))
+    poll_ids = set([v['poll_id'] for v in all_votes])
+    list_all_correct_votes = [v for v in all_votes if checkVote(v)]
+    good_user_ids = [u['user_id'] for u in all_users if checkUser(u['user_id'], list_all_correct_votes)]
+    list_all_correct_votes = [v for v in list_all_correct_votes if v['user_id'] in good_user_ids]
+    #print ("# of correct votes", len(list_all_correct_votes))
+
+    #all_dist = []
+    #all_time = []
+    #for v in list_all_correct_votes:
+    #    dl,tl = calculate_distance_time(v)
+    #    all_dist += dl
+    #    all_time += tl
+    #avgs = {}
+    #for i in range(10):
+    #    avgs[i] = []
+    #for i in range(len(all_dist)):
+    #    avgs[all_dist[i]].append(all_time[i])
+
+    #for k,v in avgs.items():
+    #    print(k,sum(v)/len(v))
+    #plt.scatter(all_dist,all_time)
+    #plt.show()
+    
+    #sim_errors = [calculate_vote_prediction_error(v,1) for v in list_all_correct_votes]
+    #dist_errors = [calculate_vote_prediction_error(v,2) for v in list_all_correct_votes]
+
+    #print(sum(sim_errors)/len(sim_errors))
+
+    #plt.hist(dist_errors)
+    #plt.show()
+
+    
     #for i in range(10):
         #print(inserlection_predictor(i,[2,4,1,6,3,5,0,9,8,7],[7,8,6,1,3,2,4,0,5,9]))
     
-    #file = open('RankNumber.json','r')
+    #file = open('ranknumbers3.json','r')
     #data = file.read()
     #file.close()
-    #parsed_data = parse_data(data)
-    #train_data = translate_data_for_regression(parsed_data)
+    data = json.dumps(list_all_correct_votes)
+    parsed_data = parse_data(data)
+    train_data_test = translate_data_for_regression(parsed_data)
     #clustered_data = cluster_users(train_data)
-    s_c_file = open("similarity_clusters","rb")
-    d_c_file = open("distance_clusters","rb")
-    clustered_data_similarity = pickle.load(s_c_file)
-    clustered_data_distance = pickle.load(d_c_file)
+    train_data = train_data_test
+    print(len(train_data.keys()))
+
+    #group_data_file = open("group_data_set","rb")
+    #train_data = pickle.load(group_data_file)
+    #group_data_file.close()
+
+    #s_c_file = open("similarity_clusters","rb")
+    #d_c_file = open("distance_clusters","rb")
+    #clustered_data_similarity = pickle.load(s_c_file)
+    #clustered_data_distance = pickle.load(d_c_file)
+
+
     #pickle.dump(clustered_data[0],s_c_file)
     #pickle.dump(clustered_data[1],d_c_file)
-    clustered_data = clustered_data_similarity,clustered_data_distance
-    s_c_file.close()
-    d_c_file.close()
-    train_data = clustered_data[0][0]
+    #clustered_data = clustered_data_similarity,clustered_data_distance
+    #s_c_file.close()
+    #d_c_file.close()
+    #new_train_data_file = open("new_data_set","rb")
+    #train_data = pickle.load(new_train_data_file)
+    #new_train_data_file.close()
+    #for r in clustered_data_similarity:
+    #    train_data = {**train_data,**r}
 
+    """
     f_names = ["f0","f1","f2","f3","f4","f5","f6","f7","f8"]
     sim_len = [len(c) for c in clustered_data_distance[:-1]]
 
     plt.bar(f_names,sim_len)
     plt.show()
 
-    """
+    
     feature_list = [2,4,5,6,7,8]
     mse_x1 = []
     mse_x2 = []
@@ -448,7 +627,7 @@ if __name__ == "__main__":
             continue
 
 
-
+    """
     #print(train_data)
     data_size = len(train_data.keys())
     altered_data_size = data_size
@@ -476,6 +655,8 @@ if __name__ == "__main__":
     #total first_last time entries
     tt_e2 = 0
 
+    tt3 = 0
+
     #total se for regression with no feature (horizontal line)
     t_mse = 0
     for user,d in train_data.items():
@@ -492,20 +673,41 @@ if __name__ == "__main__":
     
     mse_list = []
     multiple_f_mse = 0
+    new_train_data = {}
+    #train_data.pop(2026)
+    #train_data.pop(2029)
+    #train_data.pop(2030)
+    altered_data_size = len(train_data.keys())
+    cross_valid_mse = 0
     #print(train_data.keys())
     for user,d in train_data.items():
         #if user == 268:
             #print(d)
-        feature_list = [4,5,6,7,8]
+        #print(len(d[0]))
+        feature_list = [2,4]
         T_result = learning_by_user_with_multiple_features(feature_list,d)
-        if T_result[1] < 200:
-            mse_list.append(T_result[1])
-            multiple_f_mse += T_result[1]
+        #print(learning_by_user_with_multiple_features_loo(feature_list,d))
+        curr_cross_valid_mse = learning_by_user_with_multiple_features_loo(feature_list,d)
+        cross_valid_mse += curr_cross_valid_mse
+        #print(user,curr_cross_valid_mse)
+        #print(np.sqrt(curr_cross_valid_mse))
+        #if T_result[1] < 200:
+        mse_list.append(T_result[1])
+        multiple_f_mse += T_result[1]
+        tt += sum(d[0])
+        tt_e += len(d[0])
+        tt2 += sum(d[1])
+        tt_e2 += len(d[1])
+        tt3 += sum(d[1]) + sum(d[5])
+        #print("user id:",user,"MSE:",T_result[1],"Coefficients:",T_result[0],"y-intercept:",T_result[4])
+            #new_train_data[user] = d
             #print(T_result)
-        else:
-            altered_data_size -= 1
+        #else:
+            #altered_data_size -= 1
         #print("User ",user,"'s result:\nKT--- Coefficients: ", T_result[0],T_result[4],"Mean squared error: %.2f"%T_result[1]," r2 Variance score: %.2f"%T_result[2],"explained variance score: %.2f"%T_result[3])
-    print(multiple_f_mse/altered_data_size, altered_data_size)
+    print(multiple_f_mse/altered_data_size, altered_data_size,tt/tt_e,tt2/tt_e2,tt3/tt_e)
+    print(np.sqrt(cross_valid_mse/altered_data_size))
+
     b = []
     i = 0
     while i < 200:
@@ -566,7 +768,7 @@ if __name__ == "__main__":
     #print(train_data[275])
 
     #plt.scatter(test_x, test_y,  color='black')
-    """
+    
 
 
     
